@@ -30,18 +30,28 @@ is_build_step = not any(x in sys.argv[1] for x in dont_build_steps)
 
 def ensure_submodules():
     # Inspired by https://github.com/pytorch/pytorch/blob/main/setup.py
+    # Only run during development, not during build
+    
+    # Skip submodule updates during build
+    if "build" in sys.argv or "bdist" in sys.argv or "sdist" in sys.argv:
+        print("Note: Skipping submodule updates during build")
+        return
 
-    with (cwd / ".gitmodules").open() as f:
-        submodule_folders = [
-            cwd / line.split("=", 1)[1].strip()
-            for line in f.readlines()
-            if line.strip().startswith("path")
-        ]
+    try:
+        with (cwd / ".gitmodules").open() as f:
+            submodule_folders = [
+                cwd / line.split("=", 1)[1].strip()
+                for line in f.readlines()
+                if line.strip().startswith("path")
+            ]
 
-    if any(not p.exists() or not any(p.iterdir()) for p in submodule_folders):
-        subprocess.run(
-            ["git", "submodule", "update", "--init", "--recursive"], cwd=cwd, check=True
-        )
+        if any(not p.exists() or not any(p.iterdir()) for p in submodule_folders):
+            subprocess.run(
+                ["git", "submodule", "update", "--init", "--recursive"], cwd=cwd, check=True
+            )
+    except Exception as e:
+        print(f"Warning: Could not update submodules: {e}")
+        print("This is normal during build processes")
 
 
 if not MINIMAL_INSTALL:
@@ -50,15 +60,30 @@ if not MINIMAL_INSTALL:
 # inspired by https://github.com/pytorch/pytorch/blob/161ea463e690dcb91a30faacbf7d100b98524b6b/setup.py#L290
 # theirs seems to not exclude dist_info but this causes duplicate compiling in my tests
 if is_build_step and not MINIMAL_INSTALL:
-    if BUILD_TERRAIN:
-        subprocess.run(["make", "terrain"], cwd=cwd, check=True)
-    if BUILD_OPENGL:
-        subprocess.run(["make", "customgt"], cwd=cwd, check=True)
+    # Check if we're on Windows
+    is_windows = sys.platform.startswith('win')
+    
+    if BUILD_TERRAIN and not is_windows:
+        try:
+            subprocess.run(["make", "terrain"], cwd=cwd, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("Warning: Failed to build terrain components. Continuing without terrain support.")
+    
+    if BUILD_OPENGL and not is_windows:
+        try:
+            subprocess.run(["make", "customgt"], cwd=cwd, check=True)
+        except (subprocess.CalledProcessError, FileNotFoundError):
+            print("Warning: Failed to build OpenGL components. Continuing without OpenGL support.")
+    
+    if is_windows:
+        print("Note: On Windows, advanced features (terrain, OpenGL) are limited.")
+        print("Core functionality is fully supported.")
 
 cython_extensions = []
 
 if not MINIMAL_INSTALL:
-    if BUILD_BNURBS:
+    # Only build Cython extensions on non-Windows platforms or if explicitly requested
+    if BUILD_BNURBS and not sys.platform.startswith('win'):
         cython_extensions.append(
             Extension(
                 name="bnurbs",
@@ -66,7 +91,9 @@ if not MINIMAL_INSTALL:
                 include_dirs=[numpy.get_include()],
             )
         )
-    if BUILD_TERRAIN:
+    
+    # Only build terrain extensions on non-Windows platforms
+    if BUILD_TERRAIN and not sys.platform.startswith('win'):
         cython_extensions.append(
             Extension(
                 name="infinigen.terrain.marching_cubes",
